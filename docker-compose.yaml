@@ -1,0 +1,134 @@
+version: '3.8'
+
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.4
+    container_name: zookeeper
+    ports:
+      - "22181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    networks:
+      - kafka-network
+
+
+  kafka-1:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka-1
+    ports:
+      - "19092:19092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:9092,OUTSIDE://localhost:19092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_1_data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper
+    networks:
+      - kafka-network 
+     
+
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.0
+    container_name: kafka-ui
+    restart: always
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - kafka-1
+    environment:
+      KAFKA_CLUSTERS_0_NAME: zookeeper-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka-1:9092
+    networks:
+      - kafka-network
+
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.0.1
+    container_name: schema-registry
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      - kafka-1
+    environment:
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKA_BROKERS: PLAINTEXT://kafka-1:9092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka-1:9092
+    networks:
+      - kafka-network
+
+
+  postgres:
+    image: debezium/postgres:16
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres-user
+      POSTGRES_PASSWORD: postgres-pw
+      POSTGRES_DB: customers
+    networks:
+      - kafka-network
+      
+      
+  kafka-connect:
+    build:
+      context: ./kafka-connect
+    ports:
+      - "8083:8083"  # REST API Kafka Connect
+      - "9875:9875"
+      - "9876:9876"
+    depends_on:
+      - kafka-1
+      - schema-registry
+      - postgres
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka-1:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: 'kafka-connect'
+      CONNECT_REST_ADVERTISED_HOST_NAME: 'localhost'
+  
+      # Хранение конфигурации, смещений и статусов
+      CONNECT_CONFIG_STORAGE_TOPIC: 'connect-config-storage'
+      CONNECT_OFFSET_STORAGE_TOPIC: 'connect-offset-storage'
+      CONNECT_STATUS_STORAGE_TOPIC: 'connect-status-storage'
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+  
+      # Конвертеры
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+  
+      # Пути к плагинам
+      CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+    volumes:
+      - ./confluent-hub-components/:/etc/kafka-connect/jars
+    networks:
+      - kafka-network      
+
+
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_1_data:
+
+
+networks:
+  kafka-network:
+    name: custom_network
